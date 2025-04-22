@@ -1,0 +1,13 @@
+using 'main.bicep'
+
+param env = 'lab'
+param location = 'swedencentral'
+param rgContainersName = 'rg-containers'
+param logName = 'log'
+param vnetName = 'vnet-network'
+param nsgPepsName = 'nsg-private-endpoints'
+param nsgContainersName = 'nsg-containerapps'
+param privateEndpointSubnetName = 'snet-private-endpoints'
+param containersSubnetName = 'snet-containers'
+param acrPrivateEndpointName = 'pepacr'
+param agentTag = 'adoagent:latest'
