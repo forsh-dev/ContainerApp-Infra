@@ -1,0 +1,42 @@
+name: Defender for DevOps Scan
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+      - feat/*
+
+jobs:
+  sample:
+    name: Microsoft Security DevOps
+
+    # Windows and Linux agents are supported
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+      # Write access for security-events is only required for customers looking for MSDO results to appear in the codeQL security alerts tab on GitHub (Requires GHAS)
+      security-events: write
+
+    steps:
+
+      # Run analyzers
+    - name: Run Microsoft Security DevOps
+      uses: microsoft/security-devops-action@latest
+      id: msdo
+      with:
+      # config: string. Optional. A file path to an MSDO configuration file ('*.gdnconfig').
+      # policy: 'GitHub' | 'microsoft' | 'none'. Optional. The name of a well-known Microsoft policy. If no configuration file or list of tools is provided, the policy may instruct MSDO which tools to run. Default: GitHub.
+       categories: 'IaC'
+      # languages: string. Optional. A comma-separated list of languages to analyze. Example: 'javascript,typescript'. Defaults to all.
+       tools: 'checkov, templateanalyzer'
+      # Upload alerts to the Security tab - required for MSDO results to appear in the codeQL security alerts tab on GitHub (Requires GHAS)
+    - name: Upload alerts to Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+       sarif_file: ${{ steps.msdo.outputs.sarifFile }}
