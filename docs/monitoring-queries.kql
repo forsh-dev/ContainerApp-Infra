@@ -1,0 +1,168 @@
+// Security Monitoring KQL Queries for Container Apps Infrastructure
+// Import these queries into your Log Analytics workspace for security monitoring
+
+// ===============================================
+// Authentication and Access Monitoring
+// ===============================================
+
+// Failed Container Registry Authentication Attempts
+ContainerRegistryLoginEvents
+| where Result == "Failed"
+| summarize FailedAttempts = count() by Identity, SourceIP = ClientIP, bin(TimeGenerated, 5m)
+| where FailedAttempts > 5
+| project TimeGenerated, Identity, SourceIP, FailedAttempts
+| order by TimeGenerated desc
+
+// Unusual Container Registry Access Patterns
+ContainerRegistryRepositoryEvents
+| where OperationName in ("Pull", "Push", "Delete")
+| summarize Operations = count() by Identity, Repository, bin(TimeGenerated, 1h)
+| where Operations > 100  // Adjust threshold based on normal patterns
+| project TimeGenerated, Identity, Repository, Operations
+| order by Operations desc
+
+// Azure DevOps Agent Connection Monitoring
+ContainerAppConsoleLogs_CL
+| where ContainerName_s contains "docker-agent"
+| where Log_s contains "error" or Log_s contains "failed" or Log_s contains "unauthorized"
+| project TimeGenerated, ContainerName_s, Log_s
+| order by TimeGenerated desc
+
+// ===============================================
+// Network Security Monitoring  
+// ===============================================
+
+// Denied Network Traffic (NSG Flow Logs)
+AzureNetworkAnalytics_CL
+| where FlowStatus_s == "D"  // Denied flows
+| summarize DeniedConnections = count() by SrcIP_s, DestIP_s, DestPort_s, bin(TimeGenerated, 1h)
+| where DeniedConnections > 10
+| project TimeGenerated, SourceIP = SrcIP_s, DestinationIP = DestIP_s, DestinationPort = DestPort_s, DeniedConnections
+| order by DeniedConnections desc
+
+// Outbound Internet Traffic Analysis
+AzureNetworkAnalytics_CL
+| where FlowStatus_s == "A"  // Allowed flows
+| where DestIP_s !startswith "10."  // External traffic
+| where DestIP_s !startswith "172."
+| where DestIP_s !startswith "192.168."
+| summarize OutboundTraffic = sum(TotalFlow_s) by SrcIP_s, DestIP_s, DestPort_s, bin(TimeGenerated, 1h)
+| where OutboundTraffic > 1000000  // Adjust threshold for large data transfers
+| project TimeGenerated, SourceIP = SrcIP_s, DestinationIP = DestIP_s, DestinationPort = DestPort_s, OutboundTrafficMB = OutboundTraffic / 1000000
+| order by OutboundTrafficMB desc
+
+// ===============================================
+// Resource and Configuration Monitoring
+// ===============================================
+
+// Azure Resource Configuration Changes
+AzureActivity
+| where OperationNameValue contains "write" or OperationNameValue contains "delete"
+| where ResourceGroup == "rg-containers" or ResourceGroup contains "rg-containers"
+| project TimeGenerated, Caller, OperationNameValue, ResourceId, ActivityStatusValue, Properties
+| order by TimeGenerated desc
+
+// Container Apps Scaling Events
+ContainerAppSystemLogs_CL
+| where Log_s contains "scaling" or Log_s contains "replica"
+| project TimeGenerated, ContainerAppName_s, Log_s
+| order by TimeGenerated desc
+
+// Resource Quota and Limit Violations
+KubePodInventory
+| where PodStatus in ("Failed", "Pending")
+| where Reason contains "ResourceQuota" or Reason contains "LimitRange"
+| project TimeGenerated, PodName, Reason, PodStatus
+| order by TimeGenerated desc
+
+// ===============================================
+// Container Security Monitoring
+// ===============================================
+
+// Container Image Pull Events
+ContainerRegistryRepositoryEvents
+| where OperationName == "Pull"
+| project TimeGenerated, Identity, Repository, Tag, ClientIP
+| order by TimeGenerated desc
+
+// Container Runtime Security Events
+ContainerAppConsoleLogs_CL
+| where Log_s contains "privilege" or Log_s contains "permission denied" or Log_s contains "access denied"
+| project TimeGenerated, ContainerName_s, Log_s
+| order by TimeGenerated desc
+
+// Container Resource Consumption Anomalies
+Perf
+| where ObjectName == "K8SContainer"
+| where CounterName in ("Memory Working Set Bytes", "CPU Usage")
+| summarize AvgValue = avg(CounterValue) by InstanceName, CounterName, bin(TimeGenerated, 5m)
+| where AvgValue > 3000000000  // 3GB memory or adjust based on limits
+| project TimeGenerated, Container = InstanceName, Metric = CounterName, AvgValueGB = AvgValue / 1000000000
+| order by TimeGenerated desc
+
+// ===============================================
+// Security Alerts and Incidents
+// ===============================================
+
+// High-Priority Security Alert Template
+let SecurityEvents = 
+    union
+    (ContainerRegistryLoginEvents | where Result == "Failed" | extend AlertType = "Failed ACR Login"),
+    (AzureActivity | where ActivityStatusValue == "Failed" | extend AlertType = "Failed Azure Operation"),
+    (ContainerAppConsoleLogs_CL | where Log_s contains "error" | extend AlertType = "Container Error");
+SecurityEvents
+| where TimeGenerated > ago(1h)
+| project TimeGenerated, AlertType, Details = coalesce(Identity, Caller, ContainerName_s), Description = coalesce(ResultDescription, Properties, Log_s)
+| order by TimeGenerated desc
+
+// Security Baseline Compliance Check
+AzureActivity
+| where OperationNameValue contains "Microsoft.ContainerRegistry/registries/write"
+| extend Properties_parsed = parse_json(Properties)
+| where Properties_parsed.responseBody contains '"adminUserEnabled":true'
+| project TimeGenerated, Caller, ResourceId, ComplianceIssue = "Container Registry admin user enabled"
+| order by TimeGenerated desc
+
+// ===============================================
+// Performance and Availability Monitoring
+// ===============================================
+
+// Container Apps Health Check
+ContainerAppSystemLogs_CL
+| where Log_s contains "unhealthy" or Log_s contains "failed health check"
+| project TimeGenerated, ContainerAppName_s, Log_s
+| order by TimeGenerated desc
+
+// Service Availability Monitoring
+requests
+| where success == false
+| summarize FailedRequests = count() by bin(timestamp, 5m)
+| where FailedRequests > 10
+| project timestamp, FailedRequests
+| order by timestamp desc
+
+// ===============================================
+// Custom Security Dashboard Queries
+// ===============================================
+
+// Security Dashboard Summary (use for dashboard tile)
+let SecuritySummary = 
+    union
+    (ContainerRegistryLoginEvents | where TimeGenerated > ago(24h) and Result == "Failed" | summarize Count = count() | extend Category = "Failed ACR Logins"),
+    (AzureActivity | where TimeGenerated > ago(24h) and ActivityStatusValue == "Failed" | summarize Count = count() | extend Category = "Failed Azure Operations"),
+    (AzureNetworkAnalytics_CL | where TimeGenerated > ago(24h) and FlowStatus_s == "D" | summarize Count = count() | extend Category = "Denied Network Flows");
+SecuritySummary
+| project Category, Count
+| order by Count desc
+
+// Incident Response Quick Query (use during incidents)
+// Adjust time range and search terms based on incident
+let IncidentTimeRange = ago(2h);
+let SearchTerms = dynamic(["error", "failed", "denied", "unauthorized", "suspicious"]);
+union
+(ContainerAppConsoleLogs_CL | where TimeGenerated > IncidentTimeRange | where Log_s has_any (SearchTerms)),
+(AzureActivity | where TimeGenerated > IncidentTimeRange | where Properties has_any (SearchTerms)),
+(ContainerRegistryLoginEvents | where TimeGenerated > IncidentTimeRange | where Result == "Failed")
+| project TimeGenerated, Source = coalesce(ContainerName_s, Caller, Identity), Message = coalesce(Log_s, Properties, ResultDescription)
+| order by TimeGenerated desc
+| take 100
